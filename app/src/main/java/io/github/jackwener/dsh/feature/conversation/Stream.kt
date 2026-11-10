@@ -174,7 +174,7 @@ private fun TurnView(
         turn.reply?.let { reply ->
             Spacer(Modifier.height(12.dp))
             // 流式回复用打字机逐字揭示；结束后恢复正文渲染（可选中）。
-            if (running) StreamingReplyText(reply.text) else SelectionContainer { DshMarkdown(reply.text) }
+            if (running) StreamingReplyText(reply.text, running) else SelectionContainer { DshMarkdown(reply.text) }
         }
         val end = turn.endReason
         if (turn.status == TurnStatus.Stopped && turn.error == null && !running && end != EndReason.Budget) {
