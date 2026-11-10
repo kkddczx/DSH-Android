@@ -100,6 +100,8 @@ fun ChatStream(
     compact: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
+    // 见过一次就不再重播进场动画：LazyColumn 滚出再滚回来是新的组合实例。
+    val freshKeys = remember { mutableSetOf<String>() }
     var follow by remember { mutableStateOf(true) }
     val atBottom by remember { derivedStateOf { !listState.canScrollForward } }
     LaunchedEffect(listState.isScrollInProgress) { if (listState.isScrollInProgress) follow = atBottom }
@@ -112,10 +114,20 @@ fun ChatStream(
         LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp)) {
             items(conv.turns, key = { it.key }) { turn ->
                 val isLast = turn === conv.turns.last()
-                TurnView(turn, isLast, live, details, onInspect, onRetry, onOpenSettings, onContinue, compact)
+                val fresh = remember(turn.key) { freshKeys.add(turn.key) }
+                // 插入/上移时的位置动画放在 item 根上；淡入淡出交给 MessageEntrance，避免叠加。
+                val itemMod = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)
+                if (fresh) {
+                    MessageEntrance(itemMod) { TurnView(turn, isLast, live, details, onInspect, onRetry, onOpenSettings, onContinue, compact) }
+                } else {
+                    TurnView(turn, isLast, live, details, onInspect, onRetry, onOpenSettings, onContinue, compact, itemMod)
+                }
             }
             // Sent into the running turn, not logged yet: the logged user/message takes its place.
-            items(live.steers, key = { "steer/${it.id}" }) { PendingSteer(it) }
+            items(live.steers, key = { "steer/${it.id}" }) { steer ->
+                val fresh = remember("steer/${steer.id}") { freshKeys.add("steer/${steer.id}") }
+                if (fresh) MessageEntrance { PendingSteer(steer) } else PendingSteer(steer)
+            }
             item(key = "tail") {
                 Box(Modifier.fillMaxWidth().heightIn(min = 8.dp)) {
                     if (live.running) RunningIndicator(live, conv.turns.lastOrNull())
@@ -139,6 +151,7 @@ fun ChatStream(
 private fun TurnView(
     turn: Turn, isLast: Boolean, live: SessionLive, details: WorkDetails,
     onInspect: (String) -> Unit, onRetry: (TurnError) -> Unit, onOpenSettings: (String) -> Unit, onContinue: () -> Unit, compact: Boolean,
+    modifier: Modifier = Modifier,
 ) {
     val running = turn.status == TurnStatus.Running
     val process = turn.process
@@ -148,7 +161,7 @@ private fun TurnView(
         WorkDetails.Detailed -> true
     }
     var open by rememberSaveable(turn.key) { mutableStateOf(defaultOpen) }
-    Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+    Column(modifier.fillMaxWidth().padding(bottom = 12.dp)) {
         turn.user?.let { if (DshNotice.isNotice(it.text)) DshNoticeRow(it.text) else UserMessage(it, compact) }
         if (process.isNotEmpty()) {
             Spacer(Modifier.height(12.dp))
@@ -160,7 +173,8 @@ private fun TurnView(
         }
         turn.reply?.let { reply ->
             Spacer(Modifier.height(12.dp))
-            SelectionContainer { DshMarkdown(reply.text) }
+            // 流式回复用打字机逐字揭示；结束后恢复正文渲染（可选中）。
+            if (running) StreamingReplyText(reply.text) else SelectionContainer { DshMarkdown(reply.text) }
         }
         val end = turn.endReason
         if (turn.status == TurnStatus.Stopped && turn.error == null && !running && end != EndReason.Budget) {
